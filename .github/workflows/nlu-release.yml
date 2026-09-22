@@ -1,0 +1,24 @@
+# Dev Scriptless release tests — configure repository secrets (see README).
+name: Run NLU release (dev)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  nlu-release-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run release tests
+        uses: ./github-action
+        with:
+          api-url: ${{ secrets.NLU_API_URL }}
+          api-token: ${{ secrets.NLU_API_TOKEN }}
+          release-id: ${{ secrets.NLU_RELEASE_ID }}
+          wait: "true"
+          poll-interval: "30"
+          timeout-minutes: "180"

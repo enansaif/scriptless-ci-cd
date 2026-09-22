@@ -1,0 +1,80 @@
+name: Run NLU release
+description: Trigger a Scriptless release run and optionally wait for results
+inputs:
+  api-url:
+    description: NLU backend API base URL
+    required: true
+  api-token:
+    description: CI API token (nlu_...)
+    required: true
+  release-id:
+    description: Release UUID to run
+    required: true
+  wait:
+    description: Poll until the run completes
+    required: false
+    default: "true"
+  poll-interval:
+    description: Seconds between status polls
+    required: false
+    default: "30"
+  timeout-minutes:
+    description: Maximum wait time in minutes
+    required: false
+    default: "180"
+outputs:
+  run_id:
+    description: CI run identifier returned by the API
+    value: ${{ steps.trigger.outputs.run_id }}
+runs:
+  using: composite
+  steps:
+    - name: Trigger release run
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        API_TOKEN: ${{ inputs.api-token }}
+        RELEASE_ID: ${{ inputs.release-id }}
+      run: |
+        set -euo pipefail
+        BASE="${API_URL%/}"
+        RESP=$(curl -sS -X POST "${BASE}/api/ci/releases/${RELEASE_ID}/run" \
+          -H "Authorization: Bearer ${API_TOKEN}" \
+          -H "Content-Type: application/json")
+        echo "$RESP" | jq -e .run_id >/dev/null
+        RUN_ID=$(echo "$RESP" | jq -r .run_id)
+        echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+        echo "Started CI run ${RUN_ID}"
+      id: trigger
+
+    - name: Wait for release conclusion
+      if: inputs.wait == 'true'
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        API_TOKEN: ${{ inputs.api-token }}
+        RUN_ID: ${{ steps.trigger.outputs.run_id }}
+        POLL_INTERVAL: ${{ inputs.poll-interval }}
+        TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+      run: |
+        set -euo pipefail
+        BASE="${API_URL%/}"
+        DEADLINE=$(($(date +%s) + TIMEOUT_MINUTES * 60))
+        while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+          STATUS=$(curl -sS "${BASE}/api/ci/runs/${RUN_ID}" \
+            -H "Authorization: Bearer ${API_TOKEN}")
+          CONCLUSION=$(echo "$STATUS" | jq -r .conclusion)
+          RELEASE_URL=$(echo "$STATUS" | jq -r .release_url)
+          echo "conclusion=${CONCLUSION}"
+          if [ "$CONCLUSION" != "in_progress" ]; then
+            echo "Results: ${RELEASE_URL}"
+            case "$CONCLUSION" in
+              success) exit 0 ;;
+              failure|cancelled) exit 1 ;;
+              *) exit 1 ;;
+            esac
+          fi
+          sleep "$POLL_INTERVAL"
+        done
+        echo "Timed out after ${TIMEOUT_MINUTES} minutes"
+        exit 1
